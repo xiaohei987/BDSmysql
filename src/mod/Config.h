@@ -12,8 +12,9 @@ struct DatabaseConfig {
     std::string username;
     std::string password;
     std::string charset;
+    std::string serverName;  // 当前服务器名称，用于数据互通
 
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(DatabaseConfig, host, port, database, username, password, charset)
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(DatabaseConfig, host, port, database, username, password, charset, serverName)
 };
 
 class Config {

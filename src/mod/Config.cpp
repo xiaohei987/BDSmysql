@@ -15,23 +15,19 @@ Config& Config::getInstance() {
 bool Config::load() {
     auto mod = ll::mod::NativeMod::current();
     
-    // 优先使用插件根目录下的 config.json
-    auto modDir = mod->getModDir() / "config.json";
-    auto dataDir = mod->getDataDir() / "config.json";
+    // 使用 config/config.json
+    auto modDir = mod->getModDir() / "config" / "config.json";
     
-    // 检查根目录配置文件是否存在
     if (std::filesystem::exists(modDir)) {
         mConfigPath = modDir.string();
         mod->getLogger().info("Loading config from: {}", mConfigPath);
-    } else if (std::filesystem::exists(dataDir)) {
-        mConfigPath = dataDir.string();
-        mod->getLogger().info("Loading config from: {}", mConfigPath);
     } else {
-        // 都不存在，创建默认配置到根目录
+        // 不存在，创建默认配置
         mConfigPath = modDir.string();
         createDefaultConfig();
         save();
         mod->getLogger().info("Created default config file at: {}", mConfigPath);
+        mod->getLogger().info("\033[33m[配置] 默认服务器名称: {}\033[0m", mDatabaseConfig.serverName);
         return true;
     }
 
@@ -41,6 +37,8 @@ bool Config::load() {
         file >> j;
         mDatabaseConfig = j.get<DatabaseConfig>();
         mod->getLogger().info("Config loaded successfully");
+        mod->getLogger().info("\033[33m[配置] 服务器名称: {}\033[0m", mDatabaseConfig.serverName);
+        mod->getLogger().info("\033[33m[配置] 数据库: {} @ {}:{}\033[0m", mDatabaseConfig.database, mDatabaseConfig.host, mDatabaseConfig.port);
         return true;
     } catch (const std::exception& e) {
         mod->getLogger().error("Failed to load config: {}", e.what());
@@ -50,6 +48,10 @@ bool Config::load() {
 
 bool Config::save() {
     try {
+        // 确保目录存在
+        std::filesystem::path path(mConfigPath);
+        std::filesystem::create_directories(path.parent_path());
+        
         nlohmann::json j = mDatabaseConfig;
         std::ofstream  file(mConfigPath);
         file << j.dump(4);
@@ -62,12 +64,13 @@ bool Config::save() {
 }
 
 void Config::createDefaultConfig() {
-    mDatabaseConfig.host     = "localhost";
-    mDatabaseConfig.port     = 3306;
-    mDatabaseConfig.database = "minecraft";
-    mDatabaseConfig.username = "root";
-    mDatabaseConfig.password = "password";
-    mDatabaseConfig.charset  = "utf8mb4";
+    mDatabaseConfig.host        = "localhost";
+    mDatabaseConfig.port        = 3306;
+    mDatabaseConfig.database    = "minecraft";
+    mDatabaseConfig.username    = "root";
+    mDatabaseConfig.password    = "password";
+    mDatabaseConfig.charset     = "utf8mb4";
+    mDatabaseConfig.serverName  = "main";  // 默认服务器名称
 }
 
 } // namespace bdsmysql

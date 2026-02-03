@@ -138,7 +138,57 @@ bool Database::initTables() {
 
     if (mysql_query(mConnection, createTableSQL)) {
         auto mod = ll::mod::NativeMod::current();
-        mod->getLogger().error("\033[31m[数据库] 创建数据表失败！错误: {}\033[0m", mysql_error(mConnection));
+        mod->getLogger().error("\033[31m[数据库] 创建 player_data 表失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
+    // 创建玩家同步数据表（共享数据：所有服务器共享同一份数据）
+    const char* createSyncTableSQL = R"(
+        CREATE TABLE IF NOT EXISTS `player_sync_data` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `uuid` VARCHAR(36) NOT NULL UNIQUE,
+            `server_name` VARCHAR(32) DEFAULT NULL,
+            `health` INT DEFAULT 20,
+            `max_health` INT DEFAULT 20,
+            `food` INT DEFAULT 20,
+            `food_saturation` FLOAT DEFAULT 20.0,
+            `exp_level` INT DEFAULT 0,
+            `exp_points` INT DEFAULT 0,
+            `gamemode` INT DEFAULT 0,
+            `x` FLOAT DEFAULT 0,
+            `y` FLOAT DEFAULT 64,
+            `z` FLOAT DEFAULT 0,
+            `dimension` INT DEFAULT 0,
+            `last_sync_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX `idx_uuid` (`uuid`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    )";
+
+    if (mysql_query(mConnection, createSyncTableSQL)) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 创建 player_sync_data 表失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
+    // 创建玩家背包数据表（共享数据：所有服务器共享同一份数据）
+    const char* createInventoryTableSQL = R"(
+        CREATE TABLE IF NOT EXISTS `player_inventory` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `uuid` VARCHAR(36) NOT NULL,
+            `server_name` VARCHAR(32) DEFAULT NULL,
+            `slot` INT NOT NULL,
+            `item_type` VARCHAR(64) DEFAULT NULL,
+            `count` INT DEFAULT 0,
+            `damage` INT DEFAULT 0,
+            `nbt` TEXT DEFAULT NULL,
+            UNIQUE KEY `unique_slot` (`uuid`, `slot`),
+            INDEX `idx_uuid` (`uuid`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    )";
+
+    if (mysql_query(mConnection, createInventoryTableSQL)) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 创建 player_inventory 表失败！错误: {}\033[0m", mysql_error(mConnection));
         return false;
     }
 
@@ -250,6 +300,189 @@ bool Database::isPlayerExists(const std::string& uuid) {
 
     mysql_free_result(result);
     return count > 0;
+}
+
+// 保存玩家同步数据
+bool Database::savePlayerSyncData(const PlayerSyncData& data) {
+    if (!mConnected) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 数据库未连接，无法保存同步数据\033[0m");
+        return false;
+    }
+
+    auto mod = ll::mod::NativeMod::current();
+    mod->getLogger().info("\033[33m[数据库] 准备保存玩家同步数据: UUID={}, 服务器={}\033[0m", data.uuid, data.serverName);
+
+    std::ostringstream query;
+    query << "INSERT INTO `player_sync_data` (`uuid`, `server_name`, `health`, `max_health`, `food`, `food_saturation`, "
+          << "`exp_level`, `exp_points`, `gamemode`, `x`, `y`, `z`, `dimension`) "
+          << "VALUES ('" << data.uuid << "', '" << data.serverName << "', " << data.health << ", " << data.maxHealth << ", "
+          << data.food << ", " << data.foodSaturation << ", " << data.expLevel << ", " << data.expPoints << ", "
+          << data.gamemode << ", " << data.x << ", " << data.y << ", " << data.z << ", " << data.dimension << ") "
+          << "ON DUPLICATE KEY UPDATE "
+          << "`server_name` = VALUES(`server_name`), "
+          << "`health` = VALUES(`health`), `max_health` = VALUES(`max_health`), "
+          << "`food` = VALUES(`food`), `food_saturation` = VALUES(`food_saturation`), "
+          << "`exp_level` = VALUES(`exp_level`), `exp_points` = VALUES(`exp_points`), "
+          << "`gamemode` = VALUES(`gamemode`), `x` = VALUES(`x`), `y` = VALUES(`y`), "
+          << "`z` = VALUES(`z`), `dimension` = VALUES(`dimension`)";
+
+    mod->getLogger().info("\033[33m[数据库] SQL查询: {}\033[0m", query.str());
+
+    if (mysql_query(mConnection, query.str().c_str())) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 保存玩家同步数据失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
+    mod->getLogger().info("\033[32m[数据库] 玩家同步数据保存成功\033[0m");
+    return true;
+}
+
+// 加载玩家同步数据（共享数据：不区分服务器）
+bool Database::loadPlayerSyncData(const std::string& uuid, const std::string& serverName, PlayerSyncData& data) {
+    if (!mConnected) {
+        return false;
+    }
+
+    // 不再根据 server_name 过滤，所有服务器共享同一份数据
+    std::string query = "SELECT * FROM `player_sync_data` WHERE `uuid` = '" + uuid + "'";
+
+    if (mysql_query(mConnection, query.c_str())) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 加载玩家同步数据失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
+    MYSQL_RES* result = mysql_store_result(mConnection);
+    if (!result) {
+        return false;
+    }
+
+    MYSQL_ROW row = mysql_fetch_row(result);
+    if (!row) {
+        mysql_free_result(result);
+        return false;
+    }
+
+    data.id             = std::stoi(row[0]);
+    data.uuid           = row[1];
+    data.serverName     = row[2];  // 保留服务器名称，但不用于过滤
+    data.health         = std::stoi(row[3]);
+    data.maxHealth      = std::stoi(row[4]);
+    data.food           = std::stoi(row[5]);
+    data.foodSaturation = std::stof(row[6]);
+    data.expLevel       = std::stoi(row[7]);
+    data.expPoints      = std::stoi(row[8]);
+    data.gamemode       = std::stoi(row[9]);
+    data.x              = std::stof(row[10]);
+    data.y              = std::stof(row[11]);
+    data.z              = std::stof(row[12]);
+    data.dimension      = std::stoi(row[13]);
+    data.lastSyncTime   = row[14];
+
+    mysql_free_result(result);
+    return true;
+}
+
+// 更新玩家同步数据（共享数据：不区分服务器）
+bool Database::updatePlayerSyncData(const PlayerSyncData& data) {
+    if (!mConnected) {
+        return false;
+    }
+
+    std::ostringstream query;
+    query << "UPDATE `player_sync_data` SET "
+          << "`server_name` = '" << data.serverName << "', "
+          << "`health` = " << data.health << ", "
+          << "`max_health` = " << data.maxHealth << ", "
+          << "`food` = " << data.food << ", "
+          << "`food_saturation` = " << data.foodSaturation << ", "
+          << "`exp_level` = " << data.expLevel << ", "
+          << "`exp_points` = " << data.expPoints << ", "
+          << "`gamemode` = " << data.gamemode << ", "
+          << "`x` = " << data.x << ", "
+          << "`y` = " << data.y << ", "
+          << "`z` = " << data.z << ", "
+          << "`dimension` = " << data.dimension << " "
+          << "WHERE `uuid` = '" << data.uuid << "'";
+
+    if (mysql_query(mConnection, query.str().c_str())) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 更新玩家同步数据失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
+    return true;
+}
+
+// 保存玩家背包数据（共享数据：所有服务器共享同一份数据）
+bool Database::savePlayerInventory(const std::string& uuid, const std::string& serverName, const std::vector<PlayerInventoryItem>& items) {
+    if (!mConnected) {
+        return false;
+    }
+
+    // 先删除该玩家的旧背包数据（不区分服务器）
+    std::string deleteQuery = "DELETE FROM `player_inventory` WHERE `uuid` = '" + uuid + "'";
+    if (mysql_query(mConnection, deleteQuery.c_str())) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 删除旧背包数据失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
+    // 插入新的背包数据
+    for (const auto& item : items) {
+        std::ostringstream query;
+        query << "INSERT INTO `player_inventory` (`uuid`, `server_name`, `slot`, `item_type`, `count`, `damage`, `nbt`) "
+              << "VALUES ('" << uuid << "', '" << serverName << "', " << item.slot << ", "
+              << "'" << item.itemType << "', " << item.count << ", " << item.damage << ", "
+              << (item.nbt.empty() ? "NULL" : "'" + item.nbt + "'") << ")";
+
+        if (mysql_query(mConnection, query.str().c_str())) {
+            auto mod = ll::mod::NativeMod::current();
+            mod->getLogger().error("\033[31m[数据库] 保存背包物品失败！错误: {}\033[0m", mysql_error(mConnection));
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// 加载玩家背包数据（共享数据：不区分服务器）
+bool Database::loadPlayerInventory(const std::string& uuid, const std::string& serverName, std::vector<PlayerInventoryItem>& items) {
+    if (!mConnected) {
+        return false;
+    }
+
+    // 不再根据 server_name 过滤，所有服务器共享同一份数据
+    std::string query = "SELECT `slot`, `item_type`, `count`, `damage`, `nbt` FROM `player_inventory` "
+                       "WHERE `uuid` = '" + uuid + "' ORDER BY `slot`";
+
+    if (mysql_query(mConnection, query.c_str())) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 加载玩家背包数据失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
+    MYSQL_RES* result = mysql_store_result(mConnection);
+    if (!result) {
+        return false;
+    }
+
+    items.clear();
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result))) {
+        PlayerInventoryItem item;
+        item.slot     = std::stoi(row[0]);
+        item.itemType = row[1] ? row[1] : "";
+        item.count    = std::stoi(row[2]);
+        item.damage   = std::stoi(row[3]);
+        item.nbt      = row[4] ? row[4] : "";
+        items.push_back(item);
+    }
+
+    mysql_free_result(result);
+    return true;
 }
 
 } // namespace bdsmysql
