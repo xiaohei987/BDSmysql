@@ -128,8 +128,14 @@ void MyMod::onPlayerJoin(Player& player) {
     }
 
     if (hasSyncData) {
-        // 玩家有数据：先清除装备，然后加载数据库中的装备
+        // 玩家有数据：先清除装备和背包，然后加载数据库中的装备和背包
         ItemStack emptyStack;
+        auto& playerInv = player.getInventory();
+        
+        // 清空背包槽位（0-35）
+        for (int i = 0; i < 36; i++) {
+            playerInv.setItem(i, emptyStack);
+        }
         
         // 清空装备槽位（36-39）
         serverPlayer.setArmor(SharedTypes::Legacy::ArmorSlot::Head, emptyStack);
@@ -141,16 +147,17 @@ void MyMod::onPlayerJoin(Player& player) {
         serverPlayer.setOffhandSlot(emptyStack);
         
         // 同步清空后的状态到客户端
-        serverPlayer.sendArmor(std::bitset<5>(0b1111));
         serverPlayer.sendInventory(false);
+        serverPlayer.sendArmor(std::bitset<5>(0b1111));
         
-        getSelf().getLogger().info("\033[33m[数据互通] 已清空玩家 {} 的装备槽位\033[0m", name);
+        getSelf().getLogger().info("\033[33m[数据互通] 已清空玩家 {} 的所有槽位（0-40）\033[0m", name);
         
         // 加载背包和装备数据
         std::vector<PlayerInventoryItem> inventory;
         if (Database::getInstance().loadPlayerInventory(uuid, serverName, inventory)) {
             getSelf().getLogger().info("\033[33m[数据互通] 已加载 {} 个物品，正在应用...\033[0m", inventory.size());
 
+            int inventoryCount = 0;
             int armorCount = 0;
             std::bitset<5> armorSlotsToSync;
 
@@ -170,8 +177,12 @@ void MyMod::onPlayerJoin(Player& player) {
                     }
                 }
 
-                // 只设置装备和副手（36-40）
-                if (item.slot == 36) {
+                // 根据槽位类型设置物品
+                if (item.slot >= 0 && item.slot < 36) {
+                    // 背包槽位（0-35）
+                    playerInv.setItem(item.slot, stack);
+                    inventoryCount++;
+                } else if (item.slot == 36) {
                     // 头盔
                     serverPlayer.setArmor(SharedTypes::Legacy::ArmorSlot::Head, stack);
                     armorSlotsToSync.set(0);
@@ -203,12 +214,12 @@ void MyMod::onPlayerJoin(Player& player) {
             }
             
             // 同步装备到客户端
+            serverPlayer.sendInventory(false);
             if (armorSlotsToSync.any()) {
                 serverPlayer.sendArmor(armorSlotsToSync);
             }
-            serverPlayer.sendInventory(false);
             
-            getSelf().getLogger().info("\033[32m[数据互通] 已应用 {} 个装备\033[0m", armorCount);
+            getSelf().getLogger().info("\033[32m[数据互通] 已应用 {} 个背包物品，{} 个装备\033[0m", inventoryCount, armorCount);
         }
     } else {
         // 玩家没有数据：保存当前装备

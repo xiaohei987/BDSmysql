@@ -12,8 +12,9 @@
 - ✅ 记录玩家 UUID、名称、XUID
 
 ### 数据互通
-- ✅ 玩家装备同步（头盔、胸甲、护腿、靴子）
-- ✅ 玩家副手物品同步
+- ✅ 玩家背包物品同步（槽位 0-35）
+- ✅ 玩家装备同步（槽位 36-39：头盔、胸甲、护腿、靴子）
+- ✅ 玩家副手物品同步（槽位 40）
 - ✅ 玩家属性同步（生命值、饱食度、饱和度）
 - ✅ 玩家经验值同步
 - ✅ 玩家游戏模式同步
@@ -29,6 +30,8 @@
 - ✅ 彩色控制台输出
 - ✅ 自动更新玩家数据
 - ✅ 服务器停止时自动保存所有在线玩家数据
+- ✅ 使用 ActorInventoryUtils 正确获取装备数据
+- ✅ 使用 setArmor 和 setOffhandSlot 正确设置装备
 
 ## 环境要求
 
@@ -244,8 +247,8 @@ CREATE TABLE IF NOT EXISTS `player_inventory` (
 
 1. 识别玩家是否有数据库数据
 2. 如果有数据：
-   - 清空玩家装备和副手
-   - 从数据库加载装备、属性、经验等数据
+   - 清空玩家所有槽位（背包 0-35、装备 36-39、副手 40）
+   - 从数据库加载背包、装备、属性、经验等数据
    - 应用数据到玩家
 3. 如果没有数据：
    - 保存玩家当前装备到数据库
@@ -254,15 +257,27 @@ CREATE TABLE IF NOT EXISTS `player_inventory` (
 #### 玩家离开服务器时
 
 1. 保存玩家当前属性（生命值、饱食度、经验等）
-2. 使用 `ActorInventoryUtils` 正确获取装备数据
-3. 保存装备和副手数据到数据库
-4. 更新玩家在线时长
+2. 保存背包物品数据（使用 `playerInv.getItem()` 获取）
+3. 使用 `ActorInventoryUtils::getItem()` 正确获取装备数据
+4. 保存装备和副手数据到数据库
+5. 更新玩家在线时长
 
 #### 服务器停止时
 
 1. 遍历所有在线玩家
 2. 保存每个玩家的数据到数据库
 3. 更新在线状态为离线
+
+### 槽位映射
+
+| 槽位索引 | 说明 | 获取方法 | 设置方法 |
+|---------|------|---------|---------|
+| 0-35 | 背包（快捷栏和主背包） | `playerInv.getItem(i)` | `playerInv.setItem(i, stack)` |
+| 36 | 头盔 | `ActorInventoryUtils::getItem(player, EquipmentSlot::Head, 0)` | `serverPlayer.setArmor(ArmorSlot::Head, stack)` |
+| 37 | 胸甲 | `ActorInventoryUtils::getItem(player, EquipmentSlot::Torso, 0)` | `serverPlayer.setArmor(ArmorSlot::Torso, stack)` |
+| 38 | 护腿 | `ActorInventoryUtils::getItem(player, EquipmentSlot::Legs, 0)` | `serverPlayer.setArmor(ArmorSlot::Legs, stack)` |
+| 39 | 靴子 | `ActorInventoryUtils::getItem(player, EquipmentSlot::Feet, 0)` | `serverPlayer.setArmor(ArmorSlot::Feet, stack)` |
+| 40 | 副手 | `ActorInventoryUtils::getItem(player, EquipmentSlot::Offhand, 0)` | `serverPlayer.setOffhandSlot(stack)` |
 
 ### 日志说明
 
@@ -278,6 +293,7 @@ CREATE TABLE IF NOT EXISTS `player_inventory` (
 \033[33m[数据互通] 玩家 Steve 没有数据库数据，将保存当前装备\033[0m
 \033[33m[数据互通] 保存装备: minecraft:diamond_helmet 在槽位 36\033[0m
 \033[32m[数据互通] 已保存玩家 Steve 的 4 个装备\033[0m
+\033[32m[数据互通] 已应用 32 个背包物品，4 个装备\033[0m
 ```
 
 ## 常见问题
@@ -294,6 +310,13 @@ CREATE TABLE IF NOT EXISTS `player_inventory` (
 1. 确认使用的是 LeviLamina 1.7.7
 2. 检查数据库中 `player_inventory` 表是否有数据
 3. 查看服务器日志中的 `[数据互通]` 相关信息
+4. 确认使用的是正确的装备获取和设置方法
+
+### 背包物品无法同步
+
+1. 检查数据库中 `player_inventory` 表中是否有槽位 0-35 的数据
+2. 查看日志中的 `已应用 X 个背包物品` 信息
+3. 确认 `playerInv.getItem()` 和 `playerInv.setItem()` 正常工作
 
 ### 跨服传送失败
 
@@ -331,10 +354,11 @@ xmake
 
 ### 技术实现
 
-- 使用 `ActorInventoryUtils::getItem()` 正确获取装备数据
-- 使用 `ServerPlayer::setArmor()` 和 `setOffhandSlot()` 正确设置装备
-- 使用 `ServerPlayer::sendArmor()` 和 `sendInventory()` 同步装备到客户端
-- 使用 `CompoundTag` 序列化和反序列化 NBT 数据（附魔等）
+- **背包物品**：使用 `playerInv.getItem()` 和 `playerInv.setItem()` 获取和设置
+- **装备数据**：使用 `ActorInventoryUtils::getItem()` 正确获取装备数据
+- **装备设置**：使用 `ServerPlayer::setArmor()` 和 `setOffhandSlot()` 正确设置装备
+- **网络同步**：使用 `ServerPlayer::sendArmor()` 和 `sendInventory()` 同步装备到客户端
+- **NBT 序列化**：使用 `CompoundTag` 序列化和反序列化 NBT 数据（附魔等）
 
 ## 贡献
 
@@ -345,6 +369,12 @@ xmake
 CC0-1.0 © LeviMC(LiteLDev)
 
 ## 更新日志
+
+### v1.2.0
+- ✅ 添加背包物品同步（槽位 0-35）
+- ✅ 修复只同步装备的问题
+- ✅ 优化槽位映射逻辑
+- ✅ 更新文档说明
 
 ### v1.1.0
 - ✅ 添加跨服传送功能
