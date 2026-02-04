@@ -46,6 +46,24 @@ struct PlayerInventoryItem {
     std::string nbt;        // NBT数据
 };
 
+// 玩家背包数据（槽位 0-35）
+struct PlayerBackpackItem {
+    int    slot;        // 槽位 (0-35)
+    std::string itemType;  // 物品类型
+    int    count;       // 数量
+    int    damage;      // 损坏值
+    std::string nbt;        // NBT数据
+};
+
+// 玩家装备数据（槽位 36-40）
+struct PlayerEquipmentItem {
+    int    slot;        // 槽位 (36-39: 头盔/胸甲/护腿/靴子, 40: 副手)
+    std::string itemType;  // 物品类型
+    int    count;       // 数量
+    int    damage;      // 损坏值
+    std::string nbt;        // NBT数据
+};
+
 class Database {
 public:
     static Database& getInstance();
@@ -64,6 +82,14 @@ public:
     bool savePlayerSyncData(const PlayerSyncData& data);
     bool loadPlayerSyncData(const std::string& uuid, const std::string& serverName, PlayerSyncData& data);
     bool updatePlayerSyncData(const PlayerSyncData& data);
+    
+    // 背包和装备同步（分开存储）
+    bool savePlayerBackpack(const std::string& uuid, const std::string& serverName, const std::vector<PlayerBackpackItem>& items);
+    bool loadPlayerBackpack(const std::string& uuid, const std::string& serverName, std::vector<PlayerBackpackItem>& items);
+    bool savePlayerEquipment(const std::string& uuid, const std::string& serverName, const std::vector<PlayerEquipmentItem>& items);
+    bool loadPlayerEquipment(const std::string& uuid, const std::string& serverName, std::vector<PlayerEquipmentItem>& items);
+    
+    // 旧接口（兼容性保留）
     bool savePlayerInventory(const std::string& uuid, const std::string& serverName, const std::vector<PlayerInventoryItem>& items);
     bool loadPlayerInventory(const std::string& uuid, const std::string& serverName, std::vector<PlayerInventoryItem>& items);
 

@@ -192,6 +192,52 @@ bool Database::initTables() {
         return false;
     }
 
+    // 创建玩家背包数据表（槽位 0-35）
+    const char* createBackpackTableSQL = R"(
+        CREATE TABLE IF NOT EXISTS `player_backpack` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `uuid` VARCHAR(36) NOT NULL,
+            `server_name` VARCHAR(32) DEFAULT NULL,
+            `slot` INT NOT NULL,
+            `item_type` VARCHAR(64) DEFAULT NULL,
+            `count` INT DEFAULT 0,
+            `damage` INT DEFAULT 0,
+            `nbt` TEXT DEFAULT NULL,
+            UNIQUE KEY `unique_slot` (`uuid`, `slot`),
+            INDEX `idx_uuid` (`uuid`),
+            CHECK (`slot` >= 0 AND `slot` <= 35)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    )";
+
+    if (mysql_query(mConnection, createBackpackTableSQL)) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 创建 player_backpack 表失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
+    // 创建玩家装备数据表（槽位 36-40）
+    const char* createEquipmentTableSQL = R"(
+        CREATE TABLE IF NOT EXISTS `player_equipment` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `uuid` VARCHAR(36) NOT NULL,
+            `server_name` VARCHAR(32) DEFAULT NULL,
+            `slot` INT NOT NULL,
+            `item_type` VARCHAR(64) DEFAULT NULL,
+            `count` INT DEFAULT 0,
+            `damage` INT DEFAULT 0,
+            `nbt` TEXT DEFAULT NULL,
+            UNIQUE KEY `unique_slot` (`uuid`, `slot`),
+            INDEX `idx_uuid` (`uuid`),
+            CHECK (`slot` >= 36 AND `slot` <= 40)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    )";
+
+    if (mysql_query(mConnection, createEquipmentTableSQL)) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 创建 player_equipment 表失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
     auto mod = ll::mod::NativeMod::current();
     mod->getLogger().info("\033[32m[数据库] 数据表初始化成功！\033[0m");
     return true;
@@ -315,17 +361,16 @@ bool Database::savePlayerSyncData(const PlayerSyncData& data) {
 
     std::ostringstream query;
     query << "INSERT INTO `player_sync_data` (`uuid`, `server_name`, `health`, `max_health`, `food`, `food_saturation`, "
-          << "`exp_level`, `exp_points`, `gamemode`, `x`, `y`, `z`, `dimension`) "
+          << "`exp_level`, `exp_points`, `gamemode`) "
           << "VALUES ('" << data.uuid << "', '" << data.serverName << "', " << data.health << ", " << data.maxHealth << ", "
           << data.food << ", " << data.foodSaturation << ", " << data.expLevel << ", " << data.expPoints << ", "
-          << data.gamemode << ", " << data.x << ", " << data.y << ", " << data.z << ", " << data.dimension << ") "
+          << data.gamemode << ") "
           << "ON DUPLICATE KEY UPDATE "
           << "`server_name` = VALUES(`server_name`), "
           << "`health` = VALUES(`health`), `max_health` = VALUES(`max_health`), "
           << "`food` = VALUES(`food`), `food_saturation` = VALUES(`food_saturation`), "
           << "`exp_level` = VALUES(`exp_level`), `exp_points` = VALUES(`exp_points`), "
-          << "`gamemode` = VALUES(`gamemode`), `x` = VALUES(`x`), `y` = VALUES(`y`), "
-          << "`z` = VALUES(`z`), `dimension` = VALUES(`dimension`)";
+          << "`gamemode` = VALUES(`gamemode`)";
 
     mod->getLogger().info("\033[33m[数据库] SQL查询: {}\033[0m", query.str());
 
@@ -375,11 +420,11 @@ bool Database::loadPlayerSyncData(const std::string& uuid, const std::string& se
     data.expLevel       = std::stoi(row[7]);
     data.expPoints      = std::stoi(row[8]);
     data.gamemode       = std::stoi(row[9]);
-    data.x              = std::stof(row[10]);
-    data.y              = std::stof(row[11]);
-    data.z              = std::stof(row[12]);
-    data.dimension      = std::stoi(row[13]);
-    data.lastSyncTime   = row[14];
+    data.x              = 0;  // 不再使用坐标
+    data.y              = 64;
+    data.z              = 0;
+    data.dimension      = 0;
+    data.lastSyncTime   = row[10];
 
     mysql_free_result(result);
     return true;
@@ -400,11 +445,7 @@ bool Database::updatePlayerSyncData(const PlayerSyncData& data) {
           << "`food_saturation` = " << data.foodSaturation << ", "
           << "`exp_level` = " << data.expLevel << ", "
           << "`exp_points` = " << data.expPoints << ", "
-          << "`gamemode` = " << data.gamemode << ", "
-          << "`x` = " << data.x << ", "
-          << "`y` = " << data.y << ", "
-          << "`z` = " << data.z << ", "
-          << "`dimension` = " << data.dimension << " "
+          << "`gamemode` = " << data.gamemode << " "
           << "WHERE `uuid` = '" << data.uuid << "'";
 
     if (mysql_query(mConnection, query.str().c_str())) {
@@ -473,6 +514,142 @@ bool Database::loadPlayerInventory(const std::string& uuid, const std::string& s
     MYSQL_ROW row;
     while ((row = mysql_fetch_row(result))) {
         PlayerInventoryItem item;
+        item.slot     = std::stoi(row[0]);
+        item.itemType = row[1] ? row[1] : "";
+        item.count    = std::stoi(row[2]);
+        item.damage   = std::stoi(row[3]);
+        item.nbt      = row[4] ? row[4] : "";
+        items.push_back(item);
+    }
+
+    mysql_free_result(result);
+    return true;
+}
+
+// 保存玩家背包数据（槽位 0-35）
+bool Database::savePlayerBackpack(const std::string& uuid, const std::string& serverName, const std::vector<PlayerBackpackItem>& items) {
+    if (!mConnected) {
+        return false;
+    }
+
+    // 先删除该玩家的旧背包数据
+    std::string deleteQuery = "DELETE FROM `player_backpack` WHERE `uuid` = '" + uuid + "'";
+    if (mysql_query(mConnection, deleteQuery.c_str())) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 删除旧背包数据失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
+    // 插入新的背包数据
+    for (const auto& item : items) {
+        std::ostringstream query;
+        query << "INSERT INTO `player_backpack` (`uuid`, `server_name`, `slot`, `item_type`, `count`, `damage`, `nbt`) "
+              << "VALUES ('" << uuid << "', '" << serverName << "', " << item.slot << ", "
+              << "'" << item.itemType << "', " << item.count << ", " << item.damage << ", "
+              << (item.nbt.empty() ? "NULL" : "'" + item.nbt + "'") << ")";
+
+        if (mysql_query(mConnection, query.str().c_str())) {
+            auto mod = ll::mod::NativeMod::current();
+            mod->getLogger().error("\033[31m[数据库] 保存背包物品失败！错误: {}\033[0m", mysql_error(mConnection));
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// 加载玩家背包数据（槽位 0-35）
+bool Database::loadPlayerBackpack(const std::string& uuid, const std::string& serverName, std::vector<PlayerBackpackItem>& items) {
+    if (!mConnected) {
+        return false;
+    }
+
+    std::string query = "SELECT `slot`, `item_type`, `count`, `damage`, `nbt` FROM `player_backpack` "
+                       "WHERE `uuid` = '" + uuid + "' ORDER BY `slot`";
+
+    if (mysql_query(mConnection, query.c_str())) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 加载玩家背包数据失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
+    MYSQL_RES* result = mysql_store_result(mConnection);
+    if (!result) {
+        return false;
+    }
+
+    items.clear();
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result))) {
+        PlayerBackpackItem item;
+        item.slot     = std::stoi(row[0]);
+        item.itemType = row[1] ? row[1] : "";
+        item.count    = std::stoi(row[2]);
+        item.damage   = std::stoi(row[3]);
+        item.nbt      = row[4] ? row[4] : "";
+        items.push_back(item);
+    }
+
+    mysql_free_result(result);
+    return true;
+}
+
+// 保存玩家装备数据（槽位 36-40）
+bool Database::savePlayerEquipment(const std::string& uuid, const std::string& serverName, const std::vector<PlayerEquipmentItem>& items) {
+    if (!mConnected) {
+        return false;
+    }
+
+    // 先删除该玩家的旧装备数据
+    std::string deleteQuery = "DELETE FROM `player_equipment` WHERE `uuid` = '" + uuid + "'";
+    if (mysql_query(mConnection, deleteQuery.c_str())) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 删除旧装备数据失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
+    // 插入新的装备数据
+    for (const auto& item : items) {
+        std::ostringstream query;
+        query << "INSERT INTO `player_equipment` (`uuid`, `server_name`, `slot`, `item_type`, `count`, `damage`, `nbt`) "
+              << "VALUES ('" << uuid << "', '" << serverName << "', " << item.slot << ", "
+              << "'" << item.itemType << "', " << item.count << ", " << item.damage << ", "
+              << (item.nbt.empty() ? "NULL" : "'" + item.nbt + "'") << ")";
+
+        if (mysql_query(mConnection, query.str().c_str())) {
+            auto mod = ll::mod::NativeMod::current();
+            mod->getLogger().error("\033[31m[数据库] 保存装备物品失败！错误: {}\033[0m", mysql_error(mConnection));
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// 加载玩家装备数据（槽位 36-40）
+bool Database::loadPlayerEquipment(const std::string& uuid, const std::string& serverName, std::vector<PlayerEquipmentItem>& items) {
+    if (!mConnected) {
+        return false;
+    }
+
+    std::string query = "SELECT `slot`, `item_type`, `count`, `damage`, `nbt` FROM `player_equipment` "
+                       "WHERE `uuid` = '" + uuid + "' ORDER BY `slot`";
+
+    if (mysql_query(mConnection, query.c_str())) {
+        auto mod = ll::mod::NativeMod::current();
+        mod->getLogger().error("\033[31m[数据库] 加载玩家装备数据失败！错误: {}\033[0m", mysql_error(mConnection));
+        return false;
+    }
+
+    MYSQL_RES* result = mysql_store_result(mConnection);
+    if (!result) {
+        return false;
+    }
+
+    items.clear();
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(result))) {
+        PlayerEquipmentItem item;
         item.slot     = std::stoi(row[0]);
         item.itemType = row[1] ? row[1] : "";
         item.count    = std::stoi(row[2]);

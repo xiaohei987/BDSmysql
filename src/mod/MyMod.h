@@ -3,6 +3,7 @@
 #include "ll/api/mod/NativeMod.h"
 #include "ll/api/event/Listener.h"
 #include "ll/api/command/CommandRegistrar.h"
+#include "ll/api/form/SimpleForm.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/server/ServerPlayer.h"
 #include "mc/world/actor/Actor.h"
@@ -55,12 +56,15 @@ public:
     void onPlayerLeft(Player& player);
     void onServerStopping();
     void registerCommands();
+    void showServerListForm(Player& player);
 
 private:
     ll::mod::NativeMod& mSelf;
 
     // Map to track player join times for playtime calculation
     std::unordered_map<std::string, std::chrono::system_clock::time_point> mPlayerJoinTimes;
+    
+    void setPlayerAttributesDelayed(Player& player, const PlayerSyncData& syncData);
 };
 
 } // namespace bdsmysql
